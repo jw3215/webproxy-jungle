@@ -1,5 +1,6 @@
 #include "csapp.h"
 
+void echo(int connfd);
 void doit(int fd);
 void read_requesthdrs(rio_t *rp);
 int parse_uri(char *uri, char *filename, char *cgiargs);
@@ -8,6 +9,30 @@ void get_filetype(char *filename, char *filetype);
 void serve_dynamic(int fd, char *filename, char *cgiargs);
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg,
                  char *longmsg);
+
+void echo(int fd)
+{
+  size_t n;
+  char res[MAXLINE] = {};
+  char buf[MAXLINE];
+  rio_t rio;
+
+  Rio_readinitb(&rio, fd);
+  while ((n = Rio_readlineb(&rio, buf, MAXLINE)) != 0)
+  {
+    if (strcmp(buf, "\r\n") == 0)
+      break;
+    sprintf(res, "%s%s", res, buf);
+  }
+
+  sprintf(buf, "HTTP/1.0 200 OK\r\n");
+  sprintf(buf, "%sServer: Tiny Web Server\r\n", buf);
+  sprintf(buf, "%sConnection: close\r\n", buf);
+  sprintf(buf, "%sContent-length: %d\r\n", buf, (int)strlen(res));
+  sprintf(buf, "%sContent-type: %s\r\n\r\n", buf, "text/html");
+  Rio_writen(fd, buf, strlen(buf));
+  Rio_writen(fd, res, strlen(res));
+}
 
 void doit(int fd)
 {
@@ -22,12 +47,15 @@ void doit(int fd)
   printf("Request headers:\n");
   printf("%s", buf);
   sscanf(buf, "%s %s %s", method, uri, version);
-  if (strcasecmp(method, "GET"))
+  if (strcasecmp(method, "GET") == 0)
+    read_requesthdrs(&rio);
+  else if (strcasecmp(method, "HEAD") == 0)
+    read_requesthdrs(&rio);
+  else
   {
     clienterror(fd, method, "501", "Not implemented", "Tiny does not implement this method");
     return;
   }
-  read_requesthdrs(&rio);
 
   is_static = parse_uri(uri, filename, cgiargs);
   if (stat(filename, &sbuf) < 0)
@@ -107,6 +135,7 @@ int parse_uri(char *uri, char *filename, char *cgiargs)
     if (ptr)
     {
       strcpy(cgiargs, ptr + 1);
+      printf("%s\n",cgiargs);
       *ptr = '\0';
     }
     else
@@ -132,10 +161,18 @@ void serve_static(int fd, char *filename, int filesize)
   printf("%s", buf);
 
   srcfd = Open(filename, O_RDONLY, 0);
-  srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0);
+
+  /* 연습문제 11.9 */
+  srcp = (char *)malloc(filesize);
+  Rio_readn(srcfd, srcp, filesize);
   Close(srcfd);
   Rio_writen(fd, srcp, filesize);
-  Munmap(srcp, filesize);
+  free(srcp);
+
+  // srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0);
+  // Close(srcfd);
+  // Rio_writen(fd, srcp, filesize);
+  // Munmap(srcp, filesize);
 };
 
 void get_filetype(char *filename, char *filetype)
@@ -148,6 +185,8 @@ void get_filetype(char *filename, char *filetype)
     strcpy(filetype, "image/png");
   else if (strstr(filename, ".jpg"))
     strcpy(filetype, "image/jpeg");
+  else if (strstr(filename, ".mp4"))
+    strcpy(filetype, "video/mp4");
   else
     strcpy(filetype, "text/plain");
 }
@@ -167,7 +206,7 @@ void serve_dynamic(int fd, char *filename, char *cgiargs)
     Dup2(fd, STDOUT_FILENO);
     Execve(filename, emptylist, environ);
   }
-  wait(NULL);
+  Wait(NULL);
 };
 
 int main(int argc, char **argv)
@@ -177,25 +216,26 @@ int main(int argc, char **argv)
   socklen_t clientlen;
   struct sockaddr_storage clientaddr;
 
-  /* Check command line args */
+  /* 최초 서버 실행 시 전달된 인자 확인(포트번호) */
   if (argc != 2)
   {
     fprintf(stderr, "usage: %s <port>\n", argv[0]);
     exit(1);
   }
 
-  listenfd = Open_listenfd(argv[1]);
+  listenfd = Open_listenfd(argv[1]); // listening socket
 
   while (1)
   {
     clientlen = sizeof(clientaddr);
     // Accept에서 block됨.
-    connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen); // line:netp:tiny:accept
+    connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen);
 
     Getnameinfo((SA *)&clientaddr, clientlen, hostname, MAXLINE, port, MAXLINE, 0);
     printf("Accepted connection from (%s, %s)\n", hostname, port);
 
-    doit(connfd);  // line:netp:tiny:doit
-    Close(connfd); // line:netp:tiny:close
+    doit(connfd); // 실제 서버 기능 수행
+    // echo(connfd); // 연습문제 11.6.A
+    Close(connfd);
   }
 }
